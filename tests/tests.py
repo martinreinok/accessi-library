@@ -3,13 +3,12 @@ Usage example and tests to make sure the library works.
 Siemens Access-i simulator should be running for this to work (or real MRI system with appropriate IP-address).
 """
 import json
+from asyncio import LifoQueue
 from types import SimpleNamespace
-
-import src as Access
+from src import accessi as Access
 import threading
 import asyncio
 import time
-
 
 Access.config.ip_address = "127.0.0.1"
 Access.config.version = "v2"
@@ -87,8 +86,13 @@ assert output is not None
 """
 Template Execution Service
 """
-template = Access.TemplateExecution.get_templates().value[0]
-print(f"get_template [0]: {template.label}")
+# Find interactive template
+i = 0
+template = Access.TemplateExecution.get_templates().value[i]
+while not template.isInteractive:
+    i += 1
+    template = Access.TemplateExecution.get_templates().value[i]
+print(f"get_template [{i}]: {template.label}")
 template_id = template.id
 assert template_id is not None
 
@@ -168,44 +172,53 @@ print(f"set_image_format: {output}")
 assert output is True
 
 
-async def demo_callback_function(image_data):
-    if "imageStream" in image_data:
-        image_data = json.loads(json.dumps(image_data), object_hook=lambda d: SimpleNamespace(**d))
-        print(f"Websocket callback image dimensions: "
-              f"{image_data[2].value.image.dimensions.columns},"
-              f"{image_data[2].value.image.dimensions.rows} ")
+async def demo_callback_function(queue: asyncio.Queue):
+    while True:
+        image_data = await queue.get()
+        while not queue.empty():
+            await queue.get()
+        if "imageStream" in image_data:
+            image_data = json.loads(json.dumps(image_data), object_hook=lambda d: SimpleNamespace(**d))
+            print(f"Websocket callback image dimensions: "
+                  f"{image_data[2].value.image.dimensions.columns},"
+                  f"{image_data[2].value.image.dimensions.rows} ")
 
 
-def run_websocket_in_thread(config, callback_function):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(Access.connect_websocket(config, callback_function))
-    except Exception as error:
-        print(f"Websocket was unexpectedly closed (this is fine), {error}")
+async def main():
+    lifo_queue = LifoQueue()
+
+    # Run websocket
+    websocket_connected_event = asyncio.Event()
+    asyncio.create_task(Access.connect_websocket(lifo_queue, websocket_connected_event))
+    await websocket_connected_event.wait()
+
+    # Connect the image service to websocket
+    websocket = Access.Image.connect_to_default_web_socket()
+    print(f"connect_to_default_web_socket: {websocket}")
+    assert websocket.result.success is True
+
+    # Start template
+    output = Access.TemplateExecution.start(template_id).result.success
+    print(f"start: {output}")
+    assert output is True
+
+    # Start image processing thread
+    asyncio.create_task(demo_callback_function(lifo_queue))
+
+    while True:
+        await asyncio.sleep(5)
+
+        """
+        Done, cleanup
+        """
+        print("Tests done, cleaning up")
+        Access.TemplateExecution.stop()
+        Access.TemplateModification.close()
+        Access.HostControl.release_host_control()
+        Access.Authorization.deregister()
+        print("It works!")
+        raise SystemExit
 
 
-thread = threading.Thread(target=run_websocket_in_thread, args=(Access.config, demo_callback_function))
-thread.start()
-
-websocket = Access.Image.connect_to_default_web_socket()
-print(f"connect_to_default_web_socket: {websocket}")
-assert websocket.result.success is True
-
-output = Access.TemplateExecution.start(template_id).result.success
-print(f"start: {output}")
-assert output is True
-
-print("Sleeping 5 seconds")
-time.sleep(5)
-
-"""
-Done, cleanup
-"""
-
-Access.TemplateExecution.stop()
-Access.TemplateModification.close()
-Access.HostControl.release_host_control()
-Access.Authorization.deregister()
-print("It works!")
-SystemExit()
+print("Running websocket for 5 seconds")
+asyncio.run(main())

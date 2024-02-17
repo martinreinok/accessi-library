@@ -2,6 +2,7 @@
 This is a library written for Siemens Access-i websocket requests.
 Only insecure HTTPS is currently supported.
 """
+import asyncio
 # TODO: TemplateSelection Service Not implemented.
 # TODO: Patient Service Not implemented.
 # TODO: Parameter Standard Service partially implemented.
@@ -657,14 +658,15 @@ def handle_websocket_message(data):
         service = message.get('service', '')
         request = message.get('request', '')
         response = message.get('response', '')
-        print("Service:", service)
-        print("Request:", request)
     except json.JSONDecodeError as e:
         print("Error decoding JSON:", e)
     return [service, request, response, message]
 
 
-async def connect_websocket(config, callback_function):
+async def connect_websocket(queue: asyncio.Queue, websocket_connected: asyncio.Event):
+    """
+    Can use any asyncio queue
+    """
     url = f"wss://{config.ip_address}:{config.websocket_port}/SRC?sessionId={config.session_id}"
     if not config.ssl_verify:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -673,10 +675,11 @@ async def connect_websocket(config, callback_function):
     else:
         raise SystemExit("SSL verification no supported yet")
     async with websockets.connect(url, ssl=ssl_context) as websocket:
+        websocket_connected.set()
         while True:
             message = await websocket.recv()
             decoded_message = handle_websocket_message(message)
-            await callback_function(decoded_message)
+            await queue.put(decoded_message)
 
 
 def response_to_object(json_response):
