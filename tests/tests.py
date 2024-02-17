@@ -5,7 +5,7 @@ Siemens Access-i simulator should be running for this to work (or real MRI syste
 import json
 from types import SimpleNamespace
 
-import accessi as Access
+import src as Access
 import threading
 import asyncio
 import time
