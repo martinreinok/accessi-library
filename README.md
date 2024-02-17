@@ -3,7 +3,7 @@ Library for Siemens Access-i MR Scanner Interface to integrate and control the M
 
 ## Siemens Documentation
 The library is based on this document:
-[Access-i Dev Guide NX V1.1.2](documentation/Access-i_Dev_Guide_NX_V1.1.2.pdf)
+[Access-i Dev Guide NX V1.1.2](https://github.com/martinreinok/accessi-library/blob/main/documentation/Access-i_Dev_Guide_NX_V1.1.2.pdf)
 
 ## Usage guide
 A sample test suite (tests.py) has been created which demonstrates basic Access-i usage.  
