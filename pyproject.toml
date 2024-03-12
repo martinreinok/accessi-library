@@ -1,6 +1,6 @@
 [project]
 name = "accessi"
-version = "0.0.3"
+version = "0.0.4"
 authors = [
   { name="Martin Reinok", email="m.reinok@student.utwente.nl" },
 ]

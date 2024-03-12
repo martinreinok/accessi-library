@@ -2,7 +2,6 @@
 This is a library written for Siemens Access-i websocket requests.
 Only insecure HTTPS is currently supported.
 """
-import asyncio
 # TODO: TemplateSelection Service Not implemented.
 # TODO: Patient Service Not implemented.
 # TODO: Parameter Standard Service partially implemented.
@@ -14,13 +13,13 @@ import asyncio
 
 from types import SimpleNamespace
 from typing import Literal
+import numpy as np
 import websockets
 import requests
 import urllib3
-import math
+import asyncio
 import json
 import ssl
-import sys
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -47,6 +46,10 @@ class config:
     @staticmethod
     def base_url_remote():
         return f"{config.protocol}://{config.ip_address}:{config.port}/SRC/product/remote"
+
+    @staticmethod
+    def websocket_default_url():
+        return f"wss://{config.ip_address}:{config.websocket_port}/SRC?sessionId={config.session_id}"
 
 
 class Remote:
@@ -82,7 +85,7 @@ class Authorization:
     The Authorization service (authorization) ensures that only RCs with a valid authentication key
     can communicate with the Access-i server.
     Before any of the services described in this document can be used,
-    a RC must register providing a valid authentication key (provided by your point of contact at Siemens Healthineers),
+    an RC must register providing a valid authentication key (provided by your point of contact at Siemens Healthineers),
     which also encodes the scope of functionality that can be used by the RC.
     """
 
@@ -146,7 +149,7 @@ class HostControl:
     the MR host which is either the MR host itself or an RC.
     At a given point in time only one entity can actively control the host, i.e.
     has the mastership with respect to controlling the workflow.
-    As soon as a RC releases the control, the MR host is automatically in charge.
+    As soon as an RC releases the control, the MR host is automatically in charge.
     The RC can only retrieve the mastership if a patient is registered and no sequence is running or open.
     """
 
@@ -415,7 +418,7 @@ class ParameterStandard:
         return send_request(url, data, "GET")
 
     @staticmethod
-    def set_slice_position_dcs(index=0, x=None, y=None, z=None, allow_side_effects=True):
+    def set_slice_position_dcs(x=None, y=None, z=None, allow_side_effects=True, index=0):
         """
         Response example:
          - "result":{"success":true,"reason":"ok","time":"20170608T143325.423"},
@@ -426,7 +429,7 @@ class ParameterStandard:
                 "index": index,
                 "value": {"x": x, "y": y, "z": z},
                 "allowSideEffects": allow_side_effects}
-        return send_request(url, data)
+        return send_request(url, data, "POST")
 
     @staticmethod
     def get_slice_orientation_dcs():
@@ -442,10 +445,8 @@ class ParameterStandard:
         return send_request(url, data, "GET")
 
     @staticmethod
-    def set_slice_orientation_dcs(index=0, allow_side_effects=True,
-                                  normal: tuple = (0, 0, 0),
-                                  phase: tuple = (0, 0, 0),
-                                  read: tuple = (0, 0, 0)):
+    def set_slice_orientation_dcs(normal: tuple = (0, 0, 0), phase: tuple = (0, 0, 0), read: tuple = (0, 0, 0),
+                                  allow_side_effects=True, index=0):
         """
         Response example:
          - "result":{"success":true,"reason":"ok","time":"20170608T143325.423"},
@@ -463,6 +464,40 @@ class ParameterStandard:
         return send_request(url, data, "POST")
 
     @staticmethod
+    def set_slice_orientation_degrees(x_deg, y_deg, z_deg, allow_side_effects=True, index=0):
+        """
+        Response example:
+         - "result":{"success":true,"reason":"ok","time":"20170608T143325.423"},
+         - "normalSet":{"x":0,"y":0,"z":-1.0},
+         - "phaseSet":{"x":0,"y":-1.0,"z":0},
+         - "readSet":{"x":-1.0,"y":0,"z":0}
+         Don't really understand how the math works
+        """
+        # Convert degrees to radians
+        x_rad = np.radians(x_deg)
+        y_rad = np.radians(y_deg)
+        z_rad = np.radians(z_deg)
+
+        # Calculate the rotation matrices around each axis
+        Rx = np.array([[1, 0, 0], [0, np.cos(x_rad), -np.sin(x_rad)], [0, np.sin(x_rad), np.cos(x_rad)]])
+        Ry = np.array([[np.cos(y_rad), 0, np.sin(y_rad)], [0, 1, 0], [-np.sin(y_rad), 0, np.cos(y_rad)]])
+        Rz = np.array([[np.cos(z_rad), -np.sin(z_rad), 0], [np.sin(z_rad), np.cos(z_rad), 0], [0, 0, 1]])
+
+        # Combine the rotation matrices to get the overall rotation matrix
+        R = np.dot(Rz, np.dot(Ry, Rx))
+
+        # Extract the orientation vectors (normal, phase, read) from the rotation matrix
+        normal = R[:, 2]  # Third column
+        phase = R[:, 1]  # Second column
+        read = R[:, 0]  # First column
+
+        # Normalize the vectors
+        normal /= np.linalg.norm(normal)
+        phase /= np.linalg.norm(phase)
+        read /= np.linalg.norm(read)
+        return ParameterStandard.set_slice_orientation_dcs(normal, phase, read, allow_side_effects, index)
+
+    @staticmethod
     def get_slice_thickness():
         """
         Unit:mm
@@ -471,6 +506,18 @@ class ParameterStandard:
          - "value":2.5
         """
         url = f"{config.base_url()}/parameter/standard/getSliceThickness"
+        data = {"sessionId": config.session_id}
+        return send_request(url, data, "GET")
+
+    @staticmethod
+    def get_field_of_view_read():
+        """
+        Unit:mm
+        Response example:
+         - "result":{"success":true,"reason":"ok","time":"20170608T143325.423"},
+         - "value": 400.0
+        """
+        url = f"{config.base_url()}/parameter/standard/getFieldOfViewRead"
         data = {"sessionId": config.session_id}
         return send_request(url, data, "GET")
 
@@ -484,6 +531,30 @@ class ParameterStandard:
         """
         url = f"{config.base_url()}/parameter/standard/setSliceThickness"
         data = {"sessionId": config.session_id, "value": float(value), "allowSideEffects": allow_side_effects}
+        return send_request(url, data, "POST")
+
+    @staticmethod
+    def get_base_resolution():
+        """
+        Unit:mm
+        Response example:
+         - "result":{"success":true,"reason":"ok","time":"20170608T143325.423"},
+         - "value":128
+        """
+        url = f"{config.base_url()}/parameter/standard/getBaseResolution"
+        data = {"sessionId": config.session_id}
+        return send_request(url, data, "GET")
+
+    @staticmethod
+    def set_base_resolution(value, allow_side_effects=True):
+        """
+        Unit:mm
+        Response example:
+         - "result":{"success":true,"reason":"ok","time":"20170608T143325.423"},
+         - "valueSet":192
+        """
+        url = f"{config.base_url()}/parameter/standard/setBaseResolution"
+        data = {"sessionId": config.session_id, "value": value, "allowSideEffects": allow_side_effects}
         return send_request(url, data, "POST")
 
 
@@ -663,23 +734,24 @@ def handle_websocket_message(data):
     return [service, request, response, message]
 
 
-async def connect_websocket(queue: asyncio.Queue, websocket_connected: asyncio.Event):
+async def connect_websocket():
     """
-    Can use any asyncio queue
+    Connects to the websocket server and returns the connected websocket object.
+    Returns websockets.legacy.client.Connect object
     """
-    url = f"wss://{config.ip_address}:{config.websocket_port}/SRC?sessionId={config.session_id}"
-    if not config.ssl_verify:
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-    else:
-        raise SystemExit("SSL verification no supported yet")
-    async with websockets.connect(url, ssl=ssl_context) as websocket:
-        websocket_connected.set()
-        while True:
-            message = await websocket.recv()
-            decoded_message = handle_websocket_message(message)
-            await queue.put(decoded_message)
+    try:
+        url = config.websocket_default_url()
+        if not config.ssl_verify:
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+        else:
+            raise SystemExit("SSL verification not supported yet")
+        return websockets.connect(url, ssl=ssl_context)
+    except (websockets.ConnectionClosed, asyncio.TimeoutError) as e:
+        raise ConnectionError("Connection failed: " + str(e)) from e
+    except Exception as e:
+        raise e
 
 
 def response_to_object(json_response):

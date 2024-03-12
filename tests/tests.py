@@ -172,41 +172,30 @@ print(f"set_image_format: {output}")
 assert output is True
 
 
-async def demo_callback_function(queue: asyncio.Queue):
-    while True:
-        image_data = await queue.get()
-        while not queue.empty():
-            await queue.get()
-        if "imageStream" in image_data:
-            image_data = json.loads(json.dumps(image_data), object_hook=lambda d: SimpleNamespace(**d))
-            print(f"Websocket callback image dimensions: "
-                  f"{image_data[2].value.image.dimensions.columns},"
-                  f"{image_data[2].value.image.dimensions.rows} ")
-
-
 async def main():
-    lifo_queue = LifoQueue()
-
     # Run websocket
-    websocket_connected_event = asyncio.Event()
-    asyncio.create_task(Access.connect_websocket(lifo_queue, websocket_connected_event))
-    await websocket_connected_event.wait()
+    async with await Access.connect_websocket() as websocket:
 
-    # Connect the image service to websocket
-    websocket = Access.Image.connect_to_default_web_socket()
-    print(f"connect_to_default_web_socket: {websocket}")
-    assert websocket.result.success is True
+        # Connect the image service to websocket
+        websocket_connection = Access.Image.connect_to_default_web_socket()
+        print(f"connect_to_default_web_socket: {websocket_connection}")
+        assert websocket_connection.result.success is True
 
-    # Start template
-    output = Access.TemplateExecution.start(template_id).result.success
-    print(f"start: {output}")
-    assert output is True
+        # Start template
+        output = Access.TemplateExecution.start(template_id).result.success
+        print(f"start: {output}")
+        assert output is True
 
-    # Start image processing thread
-    asyncio.create_task(demo_callback_function(lifo_queue))
-
-    while True:
-        await asyncio.sleep(5)
+        # Receive one image and quit
+        while True:
+            image_data = await websocket.recv()
+            if '"imageStream"' in image_data:
+                image_data = json.dumps(Access.handle_websocket_message(image_data))
+                image_data = json.loads(image_data, object_hook=lambda d: SimpleNamespace(**d))
+                print(f"Websocket callback image dimensions: "
+                      f"{image_data[2].value.image.dimensions.columns},"
+                      f"{image_data[2].value.image.dimensions.rows} ")
+                break
 
         """
         Done, cleanup
@@ -220,5 +209,5 @@ async def main():
         raise SystemExit
 
 
-print("Running websocket for 5 seconds")
+print("Running websocket for 1 image")
 asyncio.run(main())
